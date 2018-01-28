@@ -95,12 +95,14 @@ for l in open(freq_file):
 if dataset_id == '1B':  # quick fix to overcome the fact that the freqiecy file and the training data contains this word with different capitalization
     word_frequencies['equazione_di_Bernoulli'] = 13
 
+logging.info('Reading embedding...')
 embedding_file = 'dense_embeddings/{}_sg_vocab_filtered.emb'.format(dataset_id, 'sg' if is_sg else 'cbow', 'rb')
 embeddings = pickle.load(open(embedding_file, 'rb'))
 unit_embeddings = embeddings.copy()
 model_row_norms = np.sqrt((unit_embeddings**2).sum(axis=1))[:, np.newaxis]
 unit_embeddings /= model_row_norms
 
+logging.info('Reading DAG...'_
 dag = nx.drawing.nx_agraph.read_dot(path_to_dag)
 
 deepest_occurrence = {}    # dict mapping words to their location according to their most specific concept 
@@ -120,7 +122,7 @@ for n in dag.nodes(data=True):
         if w not in deepest_occurrence or deepest_occurrence[w][2] < len(attributes):
             deepest_occurrence[w] = (node_id, len(words), len(attributes))
             words_to_attributes[w] = attributes
-attributes = set.union(*map(set, words_to_attributes.values()))
+all_attributes = set.union(*map(set, words_to_attributes.values()))
 
 def get_children_words(graph, node_id):
     return [nodes_to_words[int(n.replace('node', ''))] for n in graph['node{}'.format(node_id)].keys()]
@@ -216,8 +218,8 @@ for i, query_tuple, hypernyms in zip(range(len(train_queries)), train_queries, t
         query_attributes = set(words_to_attributes[query] if query_in_dag else [])
         gold_candidate_vec = embeddings[w2i[gold_candidate]]
         gold_candidate_attributes = set(words_to_attributes[gold_candidate] if gold_candidate_in_dag else [])
-        for attr_q in attributes:
-            for attr_c in attributes:
+        for attr_q in all_attributes:
+            for attr_c in all_attributes:
                 features['{}_{}'.format(attr_q, attr_c)][query_type].append(0)
         for attr_q in query_attributes: 
             for attr_c in gold_candidate_attributes:
@@ -345,8 +347,8 @@ for i, query_tuple, hypernyms in zip(range(len(dev_queries)), dev_queries, dev_g
         query_attributes = set(words_to_attributes[query] if query_in_dag else [])
         gold_candidate_vec = embeddings[w2i[gold_candidate]]
         gold_candidate_attributes = set(words_to_attributes[gold_candidate] if gold_candidate_in_dag else [])
-        for attr_q in attributes:
-            for attr_c in attributes:
+        for attr_q in all_attributes:
+            for attr_c in all_attributes:
                 feature_vector['{}_{}'.format(attr_q, attr_c)] = 0
         for attr_q in query_attributes: 
             for attr_c in gold_candidate_attributes:
