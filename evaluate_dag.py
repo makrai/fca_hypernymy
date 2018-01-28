@@ -1,3 +1,4 @@
+import itertools
 import logging
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s: (%(lineno)s) %(levelname)s %(message)s")
 import sys
@@ -79,6 +80,7 @@ dev_golds = [
 
 test_queries = [(l.split('\t')[0].replace(' ', '_'), l.split('\t')[1].strip()) for l in open(test_data_file)]
 
+logging.info('Reading frequencies...')
 # read in useful data re the data
 i2w = {i:w.strip() for i,w in enumerate(open('data/{}.vocab'.format(dataset_id)))}
 w2i = {v:k for k,v in i2w.items()}
@@ -118,6 +120,7 @@ for n in dag.nodes(data=True):
         if w not in deepest_occurrence or deepest_occurrence[w][2] < len(attributes):
             deepest_occurrence[w] = (node_id, len(words), len(attributes))
             words_to_attributes[w] = attributes
+attributes = set.union(*map(set, words_to_attributes.values()))
 
 def get_children_words(graph, node_id):
     return [nodes_to_words[int(n.replace('node', ''))] for n in graph['node{}'.format(node_id)].keys()]
@@ -153,37 +156,19 @@ def update_dag_based_features(features, query_type, gold, own_query_words):
                 features['dag_avg_path_len'][query_type].append(-np.mean([len(p)-1 for p in all_paths]))
                 features['dag_number_of_paths'][query_type].append(len(all_paths))
 
-features = {
-            'difference_length' : defaultdict(list),
-            'is_frequent_hypernym' : defaultdict(list),
-            'right_above_in_dag' : defaultdict(list),
-            'right_below_in_dag' : defaultdict(list),
-            'same_dag_position' : defaultdict(list),
-            'has_textual_overlap' : defaultdict(list),
-            'freq_ratios_log' : defaultdict(list),
-            'length_ratios' : defaultdict(list),
-            'attribute_differenceA' : defaultdict(list),
-            'attribute_differenceB' : defaultdict(list),
-            'attributes_intersect' : defaultdict(list),
-            'cosines' : defaultdict(list),
-            'class_label' : defaultdict(list),
-#            'dag_shortest_path' : defaultdict(list),
-#            'dag_number_of_paths' : defaultdict(list),
-#            'dag_avg_path_len' : defaultdict(list)
-}
-for name in ['first', 'last']:
-    features['cand_is_{}_w'.format(name)] = defaultdict(list)
-    features['same_{}_w'.format(name)] = defaultdict(list)
+features = defaultdict(lambda: defaultdict(list))
 training_pairs = defaultdict(list)
 
+logging.info('Computing features...')
 categories = ['Concept', 'Entity']
 very_frequent_hypernyms = {category: set([h for h,f in gold_counter[category].most_common(10)]) for category in categories}
 frequent_hypernyms = {category: set([h for h,f in gold_counter[category].most_common(100)]) for category in categories}
 np.random.seed(400)
 missed_query, missed_hypernyms = 0, 0
+attr_pair_freq = defaultdict(int)
 for i, query_tuple, hypernyms in zip(range(len(train_queries)), train_queries, train_golds):
-    #if i % 100 == 0:
-    #    logging.info('{} training cases covered.'.format(i))
+    if i % 100 == 0:
+        logging.info('{} training cases covered.'.format(i))
     query, query_type = query_tuple[0], query_tuple[1]
     if query not in w2i:
         missed_query += 1
@@ -231,6 +216,12 @@ for i, query_tuple, hypernyms in zip(range(len(train_queries)), train_queries, t
         query_attributes = set(words_to_attributes[query] if query_in_dag else [])
         gold_candidate_vec = embeddings[w2i[gold_candidate]]
         gold_candidate_attributes = set(words_to_attributes[gold_candidate] if gold_candidate_in_dag else [])
+        for attr_q in attributes:
+            for attr_c in attributes:
+                features['{}_{}'.format(attr_q, attr_c)][query_type].append(0)
+        for attr_q in query_attributes: 
+            for attr_c in gold_candidate_attributes:
+                features['{}_{}'.format(attr_q, attr_c)][query_type][-1] = 1
         training_pairs[query_type].append((query, gold_candidate))
         features['difference_length'][query_type].append(np.linalg.norm(query_vec - gold_candidate_vec))
         features['length_ratios'][query_type].append(np.linalg.norm(query_vec) / np.linalg.norm(gold_candidate_vec))
@@ -247,6 +238,8 @@ for i, query_tuple, hypernyms in zip(range(len(train_queries)), train_queries, t
             features['freq_ratios_log'][query_type].append(0)
             #logging.info(query, gold_candidate, query in word_frequencies, query in word_frequencies and gold_candidate in word_frequencies)
 
+logging.info(sorted(attr_pair_freq.items(), key=lambda i: i[1],
+                    reverse=True)[:200])
 '''
 for f in sorted(features.keys()):
     logging.info(f)
@@ -264,6 +257,7 @@ for category in categories:
         plt.close()
 '''
 
+logging.info('Training model...')
 X_per_category = {c: [] for c in categories}
 y_per_category = {}
 for category in categories:
@@ -296,8 +290,9 @@ for category in categories:
             category, 
             sorted(list(zip(feature_names_used,
                             models[category].steps[0][1].coef_[0])),
-                   key=lambda p: abs(p[1]), reverse=True)))
+                   key=lambda p: abs(p[1]), reverse=True)[:200]))
 
+logging.info('Testing...')
 true_class_index = [i for i,c in enumerate(models[query_type].classes_) if c][0]
 pred_file = open('{}.predictions'.format(path_to_dag.replace('dots', 'predictions')), 'w')
 joint_pred_file = open('{}.jointpredictions'.format(path_to_dag.replace('dots', 'predictions')), 'w')
@@ -350,6 +345,12 @@ for i, query_tuple, hypernyms in zip(range(len(dev_queries)), dev_queries, dev_g
         query_attributes = set(words_to_attributes[query] if query_in_dag else [])
         gold_candidate_vec = embeddings[w2i[gold_candidate]]
         gold_candidate_attributes = set(words_to_attributes[gold_candidate] if gold_candidate_in_dag else [])
+        for attr_q in attributes:
+            for attr_c in attributes:
+                feature_vector['{}_{}'.format(attr_q, attr_c)] = 0
+        for attr_q in query_attributes: 
+            for attr_c in gold_candidate_attributes:
+                feature_vector['{}_{}'.format(attr_q, attr_c)] = 1
         training_pairs[query_type].append((query, gold_candidate))
         feature_vector['difference_length'] = np.linalg.norm(query_vec - gold_candidate_vec)
         feature_vector['length_ratios'] = np.linalg.norm(query_vec) / np.linalg.norm(gold_candidate_vec)
@@ -366,11 +367,7 @@ for i, query_tuple, hypernyms in zip(range(len(dev_queries)), dev_queries, dev_g
             logging.info((
                 query, gold_candidate, query in word_frequencies, 
                 query in word_frequencies and gold_candidate in word_frequencies))
-        try:
-            possible_hypernym_feature_vecs.append(np.array([feature_vector[f] for f in feature_names_used]))
-        except:
-            logging.info(feature_vector.keys())
-            break
+        possible_hypernym_feature_vecs.append(np.array([feature_vector[f] for f in feature_names_used]))
     features_to_rank = np.array(possible_hypernym_feature_vecs)
     possible_hypernym_scores = models[query_type].predict_proba(features_to_rank)
     for prediction_index in np.argsort(possible_hypernym_scores[:, true_class_index])[-15:]:
@@ -384,17 +381,19 @@ for i, query_tuple, hypernyms in zip(range(len(dev_queries)), dev_queries, dev_g
 pred_file.close()
 joint_pred_file.close()
 
+logging.info('Computing base-line...')
 ### provide a baseline predicting the most common etalon hypernyms per query type always ###
 out_file = open('{}_baseline.predictions'.format(dataset_id), 'w')
 for query_tuple, hypernyms in zip(dev_queries, dev_golds):
     out_file.write('{}\n'.format('\t'.join([t[0] for t in gold_counter[query_tuple[1]].most_common(15)])))
 out_file.close()
 
+logging.info('Running the scorer...')
 solution_file = os.path.join(
     dataset_dir, 'trial/gold',
     '{}.{}.trial.gold.txt'.format(dataset_id, dataset_mapping[dataset_id][0]))
 subprocess.call(['python2', 'official-scorer.py', solution_file, pred_file.name])
-logging.info("=============")
+print("=============")
 subprocess.call(['python2', 'official-scorer.py', solution_file, joint_pred_file.name])
-logging.info(":::::::::::::")
+print(":::::::::::::")
 subprocess.call(['python2', 'official-scorer.py', solution_file, out_file.name])
