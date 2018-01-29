@@ -102,7 +102,7 @@ unit_embeddings = embeddings.copy()
 model_row_norms = np.sqrt((unit_embeddings**2).sum(axis=1))[:, np.newaxis]
 unit_embeddings /= model_row_norms
 
-logging.info('Reading DAG...'_
+logging.info('Reading DAG...')
 dag = nx.drawing.nx_agraph.read_dot(path_to_dag)
 
 deepest_occurrence = {}    # dict mapping words to their location according to their most specific concept 
@@ -240,8 +240,9 @@ for i, query_tuple, hypernyms in zip(range(len(train_queries)), train_queries, t
             features['freq_ratios_log'][query_type].append(0)
             #logging.info(query, gold_candidate, query in word_frequencies, query in word_frequencies and gold_candidate in word_frequencies)
 
-logging.info(sorted(attr_pair_freq.items(), key=lambda i: i[1],
-                    reverse=True)[:200])
+for feat, coeff in sorted(attr_pair_freq.items(), key=lambda i: i[1],
+                          reverse=True)[:200]):
+    logging.info('{} {:.2}'.format(feat, coeff))
 '''
 for f in sorted(features.keys()):
     logging.info(f)
