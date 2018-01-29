@@ -10,7 +10,7 @@ import pygraphviz
 #import matplotlib.pyplot as plt
 from collections import Counter, defaultdict
 from scipy.sparse import csr_matrix 
-from scipy.sparse import hstack
+from scipy.sparse import hstack, vstack
 
 from sklearn.preprocessing import StandardScaler
 from sklearn.preprocessing import PolynomialFeatures
@@ -277,12 +277,28 @@ for category in categories:
         plt.close()
 '''
 
+def get_att_pair_mx(ffcategory):
+    sparse_col_per_category = defaultdict(list) 
+    sparse_row_per_category = defaultdict(list)
+    sparse_data_per_category = {}
+    for qi, att_pairs_in_query in enumerate(ffcategory):
+        for att_pair in att_pairs_in_query:
+            sparse_row_per_category[category].append(qi)
+            sparse_col_per_category[category].append(
+                attribute_pair_to_ind[att_pair])
+    sparse_data_per_category[category] = len(sparse_row_per_category[
+        category]) * [1] 
+    mx = csr_matrix(
+        (sparse_data_per_category[category],
+         (sparse_row_per_category[category],
+          sparse_col_per_category[category])),
+        shape=(len(ffcategory), len(attribute_pair_to_ind)))
+    return mx
+
 X_per_category = {c: [] for c in categories}
 y_per_category = {}
 attribute_pair_to_ind = {p: i for i, p in enumerate(attribute_pair_freq)}
-sparse_col_per_category = defaultdict(list) 
-sparse_row_per_category = defaultdict(list)
-sparse_data_per_category = {}
+sparse_block_per_category = {c: [] for c in categories}
 for category in categories:
     feature_names_used = []
     for feature in sorted(features):
@@ -291,13 +307,8 @@ for category in categories:
         elif feature == 'basis_combinations':
             # TODO generate the basis combination-related features (probably
             # we shall opt for sparse representation as a consequence) 
-            for qi, att_pairs_in_query in enumerate(features[feature][category]):
-                for att_pair in att_pairs_in_query:
-                    sparse_row_per_category[category].append(qi)
-                    sparse_col_per_category[category].append(
-                        attribute_pair_to_ind[att_pair])
-            sparse_data_per_category[category] = len(sparse_row_per_category[
-                category]) * [1] 
+            sparse_block_per_category[category] = get_att_pair_mx(
+                features[feature][category])
         else:
             feature_names_used.append(feature)
             X_per_category[category].append(features[feature][category])
@@ -308,22 +319,11 @@ a joint_X az az amelyikben ömlesztve vannak a concept és az entity típusú p�
 kell még 2 másik, ahol egyszer a X_per_category['Entity'], illetve amikor a X_per_category['Concept'] a bal blokk
 """
 
-def get_att_pair_mx(category):
-    mx = csr_matrix(
-        (sparse_data_per_category[category],
-         (sparse_row_per_category[category],
-          sparse_col_per_category[category])),
-        shape=(
-            len(features['basis_combinations'][category]), 
-            len(attribute_pair_to_ind)))
-    return mx
 
 joint_X = np.array([[cv for category in categories for cv in features[fn][category]] for fn in feature_names_used]).T
-sparse_mxs = [get_att_pair_mx(category) for category in categories]
-for mx in [joint_X] + sparse_mxs:
-    logging.debug((mx.ndim, mx.shape))
-    #joint_X = hstack( (np.csr_matrix(joint_X), TODO
-logging.debug('')
+sparse_block = vstack([sparse_block_per_category[category] for category in categories])
+joint_X = hstack([joint_X, sparse_block])
+#for mx in []: logging.debug((mx.ndim, mx.shape))
 joint_y = [cl for category in categories for cl in features['class_label'][category]]
 joint_model = LogisticRegression()
 joint_model.fit(joint_X, joint_y)
@@ -334,22 +334,21 @@ models = {c: make_pipeline(LogisticRegression()) for c in categories}
 for category in categories:
     logging.info(category)
     for mx in [np.array(X_per_category[category]).T,
-               get_att_pair_mx(category)]:
+               sparse_block_per_category[category]]:
         logging.debug(mx.shape)
     X = hstack([#csr_matrix(
         np.array(X_per_category[category]).T, 
-        get_att_pair_mx(category)])
+        sparse_block_per_category[category]])
     if X.shape[0] == 0:
         models[category] = joint_model
         logging.info('Warning: joint model has to be used for {}\t{}'.format(category, list(zip(feature_names_used, joint_model.coef_[0]))))
     else:
         #X = poly.fit_transform(X)
         models[category].fit(X, y_per_category[category])
-        logging.info((
-            category,
-            sorted(list(zip(feature_names_used,
-                            models[category].steps[0][1].coef_[0])),
-                   key=lambda p: abs(p[1]), reverse=True)))
+        logging.info((category, '  '.join( 
+            '{} {:.2}'.format(fea, coeff) for fea, coeff in sorted( list(zip(
+                feature_names_used, models[category].steps[0][1].coef_[0])),
+                key=lambda p: abs(p[1]), reverse=True))))
 
 true_class_index = [i for i,c in enumerate(models[query_type].classes_) if c][0]
 pred_file = open('{}.predictions'.format(path_to_dag.replace('dots', 'predictions')), 'w')
@@ -374,7 +373,9 @@ for i, query_tuple, hypernyms in zip(range(len(dev_queries)), dev_queries, dev_g
         feature_vector = calculate_features(query, gold_candidate)
         possible_hypernym_feature_vecs.append(np.array([feature_vector[f] for f in feature_names_used]))
 
-    features_to_rank = np.array(possible_hypernym_feature_vecs)
+    features_to_rank = np.array(possible_hypernym_feature_vecs) 
+    sparse_block = None # TODO 
+    feature_vector = hstack(features_to_rank, sparse_block)
     possible_hypernym_scores = models[query_type].predict_proba(features_to_rank)
     for prediction_index in np.argsort(possible_hypernym_scores[:, true_class_index])[-15:]:
         pred_file.write(possible_hypernyms[prediction_index].replace('_', ' ') + '\t')
