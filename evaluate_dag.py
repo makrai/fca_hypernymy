@@ -9,6 +9,7 @@ import os
 import pygraphviz
 #import matplotlib.pyplot as plt
 from collections import Counter, defaultdict
+from scipy.sparse import csr_matrix
 
 from sklearn.preprocessing import StandardScaler
 from sklearn.preprocessing import PolynomialFeatures
@@ -23,8 +24,8 @@ if len(sys.argv) == 1:
 else:
     path_to_dag = sys.argv[1]
 
-dataset_dir = '/home/berend/datasets/semeval2018/SemEval18-Task9'
-#dataset_dir = '/mnt/permanent/Language/English/Data/SemEval/2018/Hypernym/SemEval2018_task9_test'
+#dataset_dir = '/home/berend/datasets/semeval2018/SemEval18-Task9'
+dataset_dir = '/mnt/permanent/Language/English/Data/SemEval/2018/Hypernym/SemEval2018_task9_test'
 sparse_dimensions = int(path_to_dag.split('_')[6])
 dataset_id = path_to_dag.replace('dots/', '')[0:2]
 is_sg = '_sg' in path_to_dag
@@ -102,7 +103,7 @@ unit_embeddings /= model_row_norms
 
 dag = nx.drawing.nx_agraph.read_dot(path_to_dag)
 
-deepest_occurrence = {}    # dict mapping words to their location according to their most specific concept 
+deepest_occurrence = {}    # dict mapping words to their location according to their most specific concept
 nodes_to_attributes = {}   # dict containing which neurons are active for a given node
 nodes_to_words = {}        # dict containing all the words located at a given node
 words_to_nodes = defaultdict(set)        # a dict containing all the nodes a word is assigned to
@@ -155,8 +156,9 @@ def update_dag_based_features(features, query_type, gold, own_query_words):
                 features['dag_number_of_paths'][query_type].append(len(all_paths))
 
 features = defaultdict(lambda: defaultdict(list))
+attribute_pair_freq = defaultdict(int)
 
-def calculate_features(query_word, gold_candidate):
+def calculate_features(query_word, gold_candidate, count_att_pairs=False):
     query_vec = embeddings[w2i[query]]
     query_tokens_l = query_word.lower().split('_')
     query_tokens = set(query_tokens_l)
@@ -185,11 +187,16 @@ def calculate_features(query_word, gold_candidate):
     feature_vector['is_frequent_hypernym'] = 1 if gold_candidate in frequent_hypernyms[query_type] else 0
     feature_vector['has_textual_overlap'] = 1 if len(gold_candidate_tokens & query_tokens) > 0 else 0
 
+    if count_att_pairs:
+        for q_att in query_attributes:
+            for c_att in gold_candidate_attributes:
+                attribute_pair_freq[q_att, c_att] += 1
+
     for name, ind in [('first', 0), ('last', -1)]:
         feature_vector['cand_is_{}_w'.format(name)] = int(
                 query_tokens_l[ind] == gold_candidate)
         feature_vector['same_{}_w'.format(name)] = int(
-            query_tokens_l[ind] == gold_candidate_tokens_l[ind]) 
+            query_tokens_l[ind] == gold_candidate_tokens_l[ind])
 
     #update_dag_based_features(features, query_type, gold, own_query_words)
     feature_vector['same_dag_position'] = 1 if query_location == gold_candidate_location else 0
@@ -239,8 +246,18 @@ for i, query_tuple, hypernyms in zip(range(len(train_queries)), train_queries, t
             continue
         training_pairs[query_type].append((query, gold_candidate))
         features['class_label'][query_type].append(gold_candidate in hypernyms)
-        for feature_name, feature_value in calculate_features(query, gold_candidate).items():
+        for feature_name, feature_value in calculate_features(
+                query, gold_candidate, count_att_pairs=True).items():
             features[feature_name][query_type].append(feature_value)
+
+
+def logg_attribute_pair_hist():
+    attribute_pair_hist = defaultdict(int)
+    for fq in attribute_pair_freq.values():
+        attribute_pair_hist[fq] += 1
+    logging.info((len(attribute_pair_freq),
+                  sorted(attribute_pair_hist.items(), key=lambda item: item[1],
+                         reverse=True)))
 
 '''
 for f in sorted(features.keys()):
@@ -261,19 +278,49 @@ for category in categories:
 
 X_per_category = {c: [] for c in categories}
 y_per_category = {}
+attribute_pair_to_ind = {p: i for i, p in enumerate(attribute_pair_freq)}
+sparse_col_per_category = defaultdict(list) 
+sparse_row_per_category = defaultdict(list)
+sparse_data_per_category = {}
 for category in categories:
     feature_names_used = []
     for feature in sorted(features):
         if feature == 'class_label':
             y_per_category[category] = features[feature][category]
         elif feature == 'basis_combinations':
-            # TODO generate the basis combination-related features (probably we shall opt for sparse representation as a consequence)
-            pass
+            # TODO generate the basis combination-related features (probably
+            # we shall opt for sparse representation as a consequence) 
+            for qi, att_pairs_in_query in enumerate(features[feature][category]):
+                for att_pair in att_pairs_in_query:
+                    sparse_row_per_category[category].append(qi)
+                    sparse_col_per_category[category].append(
+                        attribute_pair_to_ind[att_pair])
+            sparse_data_per_category[category] = len(sparse_row_per_category[
+                category]) * [1] 
         else:
             feature_names_used.append(feature)
             X_per_category[category].append(features[feature][category])
+            
+"""
+egy olyan ritkamxot kell csinálnom, aminek a bal blokkja joint_X
+a joint_X az az amelyikben ömlesztve vannak a concept és az entity típusú példák
+kell még 2 másik, ahol egyszer a X_per_category['Entity'], illetve amikor a X_per_category['Concept'] a bal blokk
+"""
+
+def get_att_pair_mx(category):
+    mx = csr_matrix(
+        (sparse_data_per_category[category],
+         (sparse_row_per_category[category],
+          sparse_col_per_category[category])),
+        shape=(
+            len(features['basis_combinations'][category]), 
+            len(attribute_pair_to_ind)))
+    return mx
 
 joint_X = np.array([[cv for category in categories for cv in features[fn][category]] for fn in feature_names_used]).T
+#for mx in [joint_X, get_att_pair_mx(category)]: logging.debug(mx.shape)
+for category in []:#TODO categories:
+    joint_X = np.concatenate((joint_X, get_att_pair_mx(category)), axis=1)
 joint_y = [cl for category in categories for cl in features['class_label'][category]]
 joint_model = LogisticRegression()
 joint_model.fit(joint_X, joint_y)
@@ -283,7 +330,11 @@ models = {c: make_pipeline(LogisticRegression()) for c in categories}
 #svm.SVC(kernel='linear', C=1, random_state=0)
 for category in categories:
     logging.info(category)
-    X = np.array(X_per_category[category]).T
+    for mx in [np.array(X_per_category[category]).T,
+               get_att_pair_mx(category)]:
+        logging.debug(mx.shape)
+    X = np.concatenate(
+        (np.array(X_per_category[category]).T, get_att_pair_mx(category)), axis=1)
     if X.shape[0] == 0:
         models[category] = joint_model
         logging.info('Warning: joint model has to be used for {}\t{}'.format(category, list(zip(feature_names_used, joint_model.coef_[0]))))
@@ -291,7 +342,7 @@ for category in categories:
         #X = poly.fit_transform(X)
         models[category].fit(X, y_per_category[category])
         logging.info((
-            category, 
+            category,
             sorted(list(zip(feature_names_used,
                             models[category].steps[0][1].coef_[0])),
                    key=lambda p: abs(p[1]), reverse=True)))
@@ -331,6 +382,7 @@ for i, query_tuple, hypernyms in zip(range(len(dev_queries)), dev_queries, dev_g
     joint_pred_file.write('\n')
 pred_file.close()
 joint_pred_file.close()
+
 
 ### provide a baseline predicting the most common etalon hypernyms per query type always ###
 out_file = open('{}_baseline.predictions'.format(dataset_id), 'w')
