@@ -9,7 +9,8 @@ import os
 import pygraphviz
 #import matplotlib.pyplot as plt
 from collections import Counter, defaultdict
-from scipy.sparse import csr_matrix
+from scipy.sparse import csr_matrix 
+from scipy.sparse import hstack
 
 from sklearn.preprocessing import StandardScaler
 from sklearn.preprocessing import PolynomialFeatures
@@ -318,9 +319,11 @@ def get_att_pair_mx(category):
     return mx
 
 joint_X = np.array([[cv for category in categories for cv in features[fn][category]] for fn in feature_names_used]).T
-#for mx in [joint_X, get_att_pair_mx(category)]: logging.debug(mx.shape)
-for category in []:#TODO categories:
-    joint_X = np.concatenate((joint_X, get_att_pair_mx(category)), axis=1)
+sparse_mxs = [get_att_pair_mx(category) for category in categories]
+for mx in [joint_X] + sparse_mxs:
+    logging.debug((mx.ndim, mx.shape))
+    #joint_X = hstack( (np.csr_matrix(joint_X), TODO
+logging.debug('')
 joint_y = [cl for category in categories for cl in features['class_label'][category]]
 joint_model = LogisticRegression()
 joint_model.fit(joint_X, joint_y)
@@ -333,8 +336,9 @@ for category in categories:
     for mx in [np.array(X_per_category[category]).T,
                get_att_pair_mx(category)]:
         logging.debug(mx.shape)
-    X = np.concatenate(
-        (np.array(X_per_category[category]).T, get_att_pair_mx(category)), axis=1)
+    X = hstack([#csr_matrix(
+        np.array(X_per_category[category]).T, 
+        get_att_pair_mx(category)])
     if X.shape[0] == 0:
         models[category] = joint_model
         logging.info('Warning: joint model has to be used for {}\t{}'.format(category, list(zip(feature_names_used, joint_model.coef_[0]))))
