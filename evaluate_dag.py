@@ -240,8 +240,8 @@ for i, query_tuple, hypernyms in zip(range(len(train_queries)), train_queries, t
             features['freq_ratios_log'][query_type].append(0)
             #logging.info(query, gold_candidate, query in word_frequencies, query in word_frequencies and gold_candidate in word_frequencies)
 
-for feat, coeff in sorted(attr_pair_freq.items(), key=lambda i: i[1],
-                          reverse=True)[:200]):
+for i, (feat, coeff) in enumerate(sorted(attr_pair_freq.items(), key=lambda i: i[1],
+                          reverse=True)):
     logging.info('{} {:.2}'.format(feat, coeff))
 '''
 for f in sorted(features.keys()):
