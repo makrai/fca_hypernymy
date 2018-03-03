@@ -530,7 +530,7 @@ class ThreeHundredSparsians(object):
         """
         baseline_filen = '{}.{}_{}.{}.predictions'.format(
             self.args.dataset_id, 
-            self.dataset_mapping[self.args.dataset_id][1],
+            self.dataset_mapping[self.args.dataset_id][0],
             'upper' if upper_bound else 'baseline', phase)
         potential_hypernyms = self.possible_hypernyms
         with open(baseline_filen, mode='w') as out_file:
